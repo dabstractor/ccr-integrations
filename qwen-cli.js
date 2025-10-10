@@ -7,6 +7,47 @@ const OAUTH_FILE = path.join(os.homedir(), ".qwen", "oauth_creds.json");
 class QwenCLITransformer {
   name = "qwen-cli";
 
+  // Normalize messages so `messages[n].content` is either a string or
+  // an array of { type: "text", text: "..." } blocks (we choose array form).
+  normalizeMessages(messages) {
+    if (!Array.isArray(messages)) return messages;
+    return messages.map((m) => {
+      const content = m.content;
+      let normalized;
+
+      if (typeof content === "string") {
+        normalized = [{ type: "text", text: content }];
+      } else if (Array.isArray(content)) {
+        normalized = content.map((item) => {
+          if (typeof item === "string") return { type: "text", text: item };
+          if (item && typeof item === "object") {
+            // already block-like?
+            if (item.type === "text" && typeof item.text === "string")
+              return { type: "text", text: item.text };
+            if (typeof item.text === "string") return { type: "text", text: item.text };
+            // fallback: stringify object
+            return { type: "text", text: JSON.stringify(item) };
+          }
+          return { type: "text", text: String(item) };
+        });
+      } else if (content && typeof content === "object") {
+        if (typeof content.text === "string") {
+          normalized = [{ type: "text", text: content.text }];
+        } else {
+          normalized = [{ type: "text", text: JSON.stringify(content) }];
+        }
+      } else {
+        // ensure at least one text block
+        normalized = [{ type: "text", text: "" }];
+      }
+
+      return {
+        ...m,
+        content: normalized,
+      };
+    });
+  }
+
   async transformRequestIn(request, provider) {
     if (!this.oauth_creds) {
       await this.getOauthCreds();
@@ -19,6 +60,12 @@ class QwenCLITransformer {
         include_usage: true,
       };
     }
+
+    // Normalize request.messages for Qwen's expected schema
+    if (Array.isArray(request.messages)) {
+      request.messages = this.normalizeMessages(request.messages);
+    }
+
     return {
       body: request,
       config: {

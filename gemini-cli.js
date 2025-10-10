@@ -219,6 +219,7 @@ class GeminiCLITransformer {
     return {
       body: {
         request: {
+
           contents: request.messages.map((message) => {
             let role;
             if (message.role === "assistant") {
@@ -228,57 +229,56 @@ class GeminiCLITransformer {
             } else {
               role = "user"; // Default to user if role is not recognized
             }
+
             const parts = [];
+
+            // 1️⃣ Normalize message.content
             if (typeof message.content === "string") {
-              parts.push({
-                text: message.content,
-              });
+              parts.push({ text: message.content });
             } else if (Array.isArray(message.content)) {
-              parts.push(
-                ...message.content.map((content) => {
-                  if (content.type === "text") {
-                    return {
-                      text: content.text || "",
-                    };
+              for (const c of message.content) {
+                if (!c) continue;
+                if (c.type === "text" && c.text) {
+                  parts.push({ text: c.text });
+                } else if (c.type === "image_url" && c.image_url?.url) {
+                  if (c.image_url.url.startsWith("http")) {
+                    parts.push({
+                      file_data: { mime_type: c.media_type, file_uri: c.image_url.url },
+                    });
+                  } else {
+                    parts.push({
+                      inlineData: { mime_type: c.media_type, data: c.image_url.url.split(",").pop() },
+                    });
                   }
-                  if (content.type === "image_url") {
-                    if (content.image_url.url.startsWith("http")) {
-                      return {
-                        file_data: {
-                          mime_type: content.media_type,
-                          file_uri: content.image_url.url,
-                        },
-                      };
-                    } else {
-                      return {
-                        inlineData: {
-                          mime_type: content.media_type,
-                          data:
-                            content.image_url.url?.split(",")?.pop() ||
-                            content.image_url.url,
-                        },
-                      };
-                    }
-                  }
-                })
-              );
+                }
+              }
+            } else if (message.content && typeof message.content === "object") {
+              // Object like { text: "..." }
+              if (message.content.text) {
+                parts.push({ text: message.content.text });
+              } else {
+                parts.push({ text: JSON.stringify(message.content) });
+              }
             }
 
+            // 2️⃣ Add tool calls
             if (Array.isArray(message.tool_calls)) {
-              parts.push(
-                ...message.tool_calls.map((toolCall) => {
-                  return {
-                    functionCall: {
-                      id:
-                        toolCall.id ||
-                        `tool_${Math.random().toString(36).substring(2, 15)}`,
-                      name: toolCall.function.name,
-                      args: JSON.parse(toolCall.function.arguments || "{}"),
-                    },
-                  };
-                })
-              );
+              for (const t of message.tool_calls) {
+                parts.push({
+                  functionCall: {
+                    id: t.id || `tool_${Math.random().toString(36).slice(2, 15)}`,
+                    name: t.function.name,
+                    args: JSON.parse(t.function.arguments || "{}"),
+                  },
+                });
+              }
             }
+
+            // 3️⃣ Ensure at least one part exists
+            if (parts.length === 0) {
+              parts.push({ text: "" });
+            }
+
             return {
               role,
               parts,
